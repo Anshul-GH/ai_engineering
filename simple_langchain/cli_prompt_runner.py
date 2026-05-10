@@ -78,41 +78,99 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a local Ollama-backed LangChain prompt pipeline."
     )
+
+    parser.add_argument(
+        "--mode",
+        choices=["one-shot", "research"],
+        default="one-shot",
+        help="Run single-shot or research-and-summarize flow.",
+    )
+
     parser.add_argument(
         "--system-file",
-        default="output/prompts/system.md",
+        default="prompts/system.md",
         help="Path to system prompt file.",
     )
+
     parser.add_argument(
         "--model",
         default="llama3:latest",
         help="Ollama model name.",
     )
+
     parser.add_argument(
         "--base-url",
         default="http://127.0.0.1:11434",
         help="Ollama base URL.",
     )
+
     parser.add_argument(
         "--user-input",
         help="User input text. If omitted, prompt interactively.",
     )
+
     parser.add_argument(
         "--approve",
         action="store_true",
         help="Require manual approval before model invocation.",
     )
+
     return parser.parse_args()
 
+def run_research(system_prompt: str, model: str, base_url: str, user_input: str, approve: bool) -> str:
+    # Shared state
+    state = {
+        "user_query": user_input,
+        "search_query": "",
+        "search_results": "",
+        "final_answer": "",
+    }
 
-def main() -> None:
-    args = parse_args()
-    system_prompt = load_text(args.system_file)
-    user_input = args.user_input or input("Enter user input: ").strip()
+    # STEP 1: generate a search query
+    search_system = system_prompt + "\n\nYou are a research planner. " \
+        "Given the user query, produce a short, precise web search query.\n" \
+        "Return ONLY the search query text, no explanation."
 
+    search_query = run_one_shot(
+        system_prompt=search_system,
+        model=model,
+        base_url=base_url,
+        user_input=state["user_query"],
+        approve=approve,
+    )
+    state["search_query"] = search_query.strip()
+
+    # STEP 2: fake search results (stub; swap with a real tool later)
+    state["search_results"] = (
+        f"Result snippet 1 for '{state['search_query']}'...\n"
+        f"Result snippet 2 for '{state['search_query']}'...\n"
+        f"Result snippet 3 for '{state['search_query']}'...\n"
+    )
+
+    # STEP 3: summarize into final answer
+    summarize_system = system_prompt + \
+        "\n\nYou are a research summarizer. Use the provided search results " \
+        "to answer the user query concisely."
+
+    summarize_user_input = (
+        f"User query:\n{state['user_query']}\n\n"
+        f"Search results:\n{state['search_results']}\n"
+    )
+
+    final_answer = run_one_shot(
+        system_prompt=summarize_system,
+        model=model,
+        base_url=base_url,
+        user_input=summarize_user_input,
+        approve=approve,
+    )
+    state["final_answer"] = final_answer.strip()
+    return state["final_answer"]
+
+def run_one_shot(system_prompt: str, model: str, base_url: str, user_input: str, approve: bool) -> str:
     prompt = build_prompt_template(system_prompt)
-    approval_gate = RunnableLambda(make_approval_gate(args.approve))
-    llm = RunnableLambda(make_ollama_caller(args.model, args.base_url))
+    approval_gate = RunnableLambda(make_approval_gate(approve))
+    llm = RunnableLambda(make_ollama_caller(model, base_url))
 
     chain = RunnableSequence(
         prompt,
@@ -121,7 +179,18 @@ def main() -> None:
         StrOutputParser(),
     )
 
-    result = chain.invoke({"user_input": user_input})
+    return chain.invoke({"user_input": user_input})
+
+def main() -> None:
+    args = parse_args()
+    system_prompt = load_text(args.system_file)
+    user_input = args.user_input or input("Enter user input: ").strip()
+
+    if args.mode == "one-shot":
+        result = run_one_shot(system_prompt, args.model, args.base_url, user_input, args.approve)
+    else:
+        result = run_research(system_prompt, args.model, args.base_url, user_input, args.approve)
+
     print("\n===== MODEL RESPONSE =====")
     print(result)
 
