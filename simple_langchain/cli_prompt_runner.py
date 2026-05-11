@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import List
 
 import httpx
 from langchain_core.output_parsers import StrOutputParser
@@ -81,9 +82,14 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--mode",
-        choices=["one-shot", "research"],
+        choices=["one-shot", "research", "rag"],
         default="one-shot",
-        help="Run single-shot or research-and-summarize flow.",
+        help="Run single-shot, research, or RAG flow.",
+    )
+
+    parser.add_argument(
+        "--docs-path",
+        help="Path to a text/markdown file or directory of docs for RAG mode.",
     )
 
     parser.add_argument(
@@ -116,6 +122,67 @@ def parse_args() -> argparse.Namespace:
     )
 
     return parser.parse_args()
+
+def load_docs(path: str) -> List[str]:
+    p = Path(path)
+    texts: List[str] = []
+    if p.is_file():
+        texts.append(p.read_text(encoding="utf-8", errors="ignore"))
+    elif p.is_dir():
+        for f in p.rglob("*.txt"):
+            texts.append(f.read_text(encoding="utf-8", errors="ignore"))
+        for f in p.rglob("*.md"):
+            texts.append(f.read_text(encoding="utf-8", errors="ignore"))
+    else:
+        raise FileNotFoundError(f"Docs path not found: {path}")
+    return texts
+
+def simple_chunk(text: str, chunk_size: int = 800, overlap: int = 100) -> List[str]:
+    chunks: List[str] = []
+    start = 0
+    n = len(text)
+    while start < n:
+        end = min(start + chunk_size, n)
+        chunks.append(text[start:end])
+        start += chunk_size - overlap
+    return chunks
+
+def score_chunk(query: str, chunk: str) -> int:
+    q_words = set(query.lower().split())
+    c_words = set(chunk.lower().split())
+    return len(q_words & c_words)
+
+def run_rag(system_prompt: str, model: str, base_url: str, user_input: str, approve: bool, docs_path: str) -> str:
+    if not docs_path:
+        raise ValueError("--docs-path is required for rag mode.")
+
+    # 1) Load and chunk docs
+    raw_docs = load_docs(docs_path)
+    all_chunks: List[str] = []
+    for doc in raw_docs:
+        all_chunks.extend(simple_chunk(doc))
+
+    if not all_chunks:
+        raise ValueError(f"No chunks loaded from {docs_path}")
+
+    # 2) Score chunks by naive overlap
+    scored = [(score_chunk(user_input, c), c) for c in all_chunks]
+    scored = [item for item in scored if item[0] > 0] or scored
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top_chunks = [c for _, c in scored[:3]]  # take top 3
+
+    context = "\n\n---\n\n".join(top_chunks)
+
+    # 3) Build a RAG-style user input
+    rag_user_input = (
+        f"Use ONLY the context below to answer the question.\n"
+        f"If the answer is not in the context, say you don't know.\n\n"
+        f"Question:\n{user_input}\n\n"
+        f"Context:\n{context}\n"
+    )
+
+    # 4) Call your existing pipeline
+    return run_one_shot(system_prompt, model, base_url, rag_user_input, approve)
 
 def run_research(system_prompt: str, model: str, base_url: str, user_input: str, approve: bool) -> str:
     # Shared state
@@ -188,8 +255,10 @@ def main() -> None:
 
     if args.mode == "one-shot":
         result = run_one_shot(system_prompt, args.model, args.base_url, user_input, args.approve)
-    else:
+    elif args.mode == "research":
         result = run_research(system_prompt, args.model, args.base_url, user_input, args.approve)
+    else:  # rag
+        result = run_rag(system_prompt, args.model, args.base_url, user_input, args.approve, args.docs_path)
 
     print("\n===== MODEL RESPONSE =====")
     print(result)

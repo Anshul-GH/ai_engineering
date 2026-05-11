@@ -1,0 +1,34 @@
+Title: Python Virtual Environments - Quick Guide
+
+A Python virtual environment is an isolated directory that contains its own Python interpreter and a separate set of installed packages. This isolation prevents dependency conflicts between different projects on the same machine.
+
+Why use a virtual environment?
+
+1. Dependency isolation:
+   Each project can pin its own versions of libraries without affecting others. For example, one project can use Django 3.2 while another uses Django 5, and they won't clash.
+
+2. Reproducibility:
+   By combining a virtual environment with a requirements.txt file, you can recreate the same environment on another machine. This is essential for collaborative work and deployment.
+
+3. Cleaner global environment:
+   Instead of installing every package globally, you keep your system Python lean and only install project-specific packages inside the environment.
+
+How to create and activate a virtual environment (on Unix/macOS):
+
+1. Create:
+   python -m venv .venv
+
+2. Activate:
+   source .venv/bin/activate
+
+3. Install packages:
+   pip install requests
+
+On Windows, activation uses:
+   .venv\Scripts\activate
+
+To deactivate the environment, run:
+   deactivate
+
+Key idea:
+A virtual environment gives each project its own "mini Python installation" with its own site-packages, so projects do not interfere with each other's dependencies.
